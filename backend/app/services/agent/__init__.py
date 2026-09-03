@@ -5,6 +5,7 @@ from .company_analyzer import company_analyze
 from .drive import export_to_drive
 from .health import check_llm_health, check_mcp_health
 from .mcp_client import get_benchmark, get_history, save_to_mongo
+from .rag_service import build_rag_context, generate_embedding, search_similar_jds, seed_job_description
 from .rewriter import rewrite
 from .roadmap_generator import roadmap
 
@@ -19,5 +20,9 @@ __all__ = [
     "export_to_drive",
     "check_llm_health",
     "check_mcp_health",
+    "build_rag_context",
+    "generate_embedding",
+    "search_similar_jds",
+    "seed_job_description",
 ]
 
