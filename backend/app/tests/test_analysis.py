@@ -1,4 +1,4 @@
-"""Unit tests for Stage 3 RAG-augmented Analysis & JD Keyword Matcher Backend."""
+"""Unit tests for RAG-augmented Analysis & JD Keyword Matcher Backend."""
 
 from app.schemas.analysis import AnalysisRequest
 from app.services.agent.prompts.analysis import GENERAL_ANALYSIS_PROMPT, FRESHER_ANALYSIS_PROMPT

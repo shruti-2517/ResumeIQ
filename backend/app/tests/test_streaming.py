@@ -1,4 +1,4 @@
-"""Unit tests for Stage 5 SSE Streaming & E2E Validation."""
+"""Unit tests for Server-Sent Events (SSE) Streaming & E2E Validation."""
 
 import json
 import pytest
