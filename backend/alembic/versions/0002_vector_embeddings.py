@@ -1,4 +1,4 @@
-"""Create vector extension and jd_embeddings table.
+"""Create vector extension and jd_embeddings table with native pgvector.
 
 Revision ID: 0002
 Revises: 0001
@@ -19,10 +19,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # 1. Enable pgvector extension
+    # 1. Enable native pgvector extension
     op.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
-    # 2. Create jd_embeddings table
+    # 2. Create jd_embeddings table with Vector(768) column
     op.create_table(
         "jd_embeddings",
         sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),

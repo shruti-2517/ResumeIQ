@@ -13,7 +13,6 @@ pydantic==2.13.4
 httpx==0.28.1
 google-genai==2.6.0
 google-cloud-aiplatform==1.57.0
-pymongo==4.17.0
 requests==2.32.3
 pgvector==0.3.6
 sse-starlette==2.1.3

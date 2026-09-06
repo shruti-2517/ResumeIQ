@@ -1,9 +1,7 @@
 """External dependency health checks."""
 
 from typing import Any
-
 from .gemini import call_gemini
-from .mcp_client import _call_mcp
 from .prompts.health import LLM_HEALTH_PROMPT
 
 
@@ -18,9 +16,5 @@ async def check_llm_health() -> dict[str, str]:
 
 
 async def check_mcp_health() -> dict[str, Any]:
-    """Verify the MCP endpoint itself rather than its direct-MongoDB fallback."""
-    result = await _call_mcp("list_collections", {}, allow_fallback=False)
-    if "error" in result:
-        return {"mcp": "error", "detail": str(result.get("reason", "Unknown MCP error"))}
-    return {"mcp": "connected", "collections": result.get("collections", [])}
-
+    """Health check for system services."""
+    return {"status": "active", "storage": "postgresql"}

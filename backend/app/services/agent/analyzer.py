@@ -1,10 +1,11 @@
-"""Resume analysis pipeline with fresher-mode switching."""
+"""Resume analysis pipeline with RAG context and fresher-mode switching."""
 
 import logging
 from typing import Any
 
 from .gemini import call_gemini
 from .prompts.analysis import FRESHER_ANALYSIS_PROMPT, GENERAL_ANALYSIS_PROMPT
+from .rag_service import build_rag_context, seed_job_description
 
 logger = logging.getLogger(__name__)
 
@@ -53,25 +54,59 @@ def _validate_analysis(result: dict[str, Any], expected_mode: str) -> dict[str, 
     return None
 
 
-async def analyze(raw_text: str, target_role: str | None = None) -> dict[str, Any]:
-    """Analyze a resume and rerun with fresher calibration when needed."""
+async def analyze(
+    raw_text: str,
+    target_role: str | None = None,
+    job_description: str | None = None,
+    db: Any = None,
+) -> dict[str, Any]:
+    """Analyze a resume using Gemini, augmented with RAG context and JD keyword matching."""
     if not isinstance(raw_text, str) or not raw_text.strip():
         return {"error": "ANALYSIS_FAILED", "reason": "Resume text is empty"}
 
     target = target_role.strip() if isinstance(target_role, str) and target_role.strip() else "Not specified"
-    result = await call_gemini(
-        GENERAL_ANALYSIS_PROMPT.format(resume_text=raw_text, target_role=target),
-        expect_json=True,
+    jd = job_description.strip() if isinstance(job_description, str) and job_description.strip() else "Not provided"
+
+    # Seed JD into RAG embeddings if provided and DB session is available
+    if db is not None and jd != "Not provided":
+        try:
+            await seed_job_description(
+                role_title=target if target != "Not specified" else "Target Role",
+                company=None,
+                jd_text=jd,
+                db=db,
+            )
+        except Exception as exc:
+            logger.warning("Failed to seed JD into RAG embeddings: %s", exc)
+
+    # Retrieve RAG context if DB session is available
+    rag_context = ""
+    if db is not None:
+        try:
+            rag_context = await build_rag_context(target_role, None, raw_text, db)
+        except Exception as exc:
+            logger.warning("Failed to build RAG context: %s", exc)
+
+    prompt_str = GENERAL_ANALYSIS_PROMPT.format(
+        resume_text=raw_text,
+        target_role=target,
+        job_description=jd,
+        rag_context=rag_context,
     )
+
+    result = await call_gemini(prompt_str, expect_json=True)
     if not isinstance(result, dict) or "error" in result:
         return result
 
     if result.get("is_fresher") is True:
         logger.info("Fresher resume detected; rerunning analysis in fresher mode")
-        result = await call_gemini(
-            FRESHER_ANALYSIS_PROMPT.format(resume_text=raw_text, target_role=target),
-            expect_json=True,
+        fresher_prompt_str = FRESHER_ANALYSIS_PROMPT.format(
+            resume_text=raw_text,
+            target_role=target,
+            job_description=jd,
+            rag_context=rag_context,
         )
+        result = await call_gemini(fresher_prompt_str, expect_json=True)
         if not isinstance(result, dict) or "error" in result:
             return result
         error = _validate_analysis(result, "fresher")
@@ -79,4 +114,3 @@ async def analyze(raw_text: str, target_role: str | None = None) -> dict[str, An
 
     error = _validate_analysis(result, "general")
     return error or result
-

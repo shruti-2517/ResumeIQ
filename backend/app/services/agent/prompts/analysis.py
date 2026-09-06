@@ -1,4 +1,4 @@
-"""Resume analysis prompt templates."""
+"""Resume analysis prompt templates with RAG & Job Description Keyword Matcher."""
 
 GENERAL_ANALYSIS_PROMPT = """\
 [SYSTEM ROLE]
@@ -12,7 +12,7 @@ Analyze the resume across these 7 dimensions: ATS Compatibility, Impact & Quanti
 Skill Relevance, Language & Authenticity, Structure & Readability, Completeness, and
 Competitive Standing. For each dimension, provide an integer score from 0 to 100, a
 one-sentence verdict, and a finding tied directly to resume text. Also provide exactly
-three strengths, ordered critical fixes, fresher detection, and an honest summary.
+three strengths, ordered critical fixes, fresher detection, an honest summary, and a keyword_match breakdown comparing the resume against the target role and job description.
 
 [INPUT DATA]
 RESUME TEXT:
@@ -20,7 +20,10 @@ RESUME TEXT:
 {resume_text}
 ---
 TARGET ROLE: {target_role}
+JOB DESCRIPTION: {job_description}
 EVALUATION MODE: general
+
+{rag_context}
 
 [OUTPUT CONTRACT]
 Return ONLY a valid JSON object matching this exact schema. No preamble. No explanation
@@ -44,6 +47,12 @@ outside the JSON. No markdown code fences. No trailing commas. No extra keys.
       "fix": "<specific actionable step>"
     }}
   ],
+  "keyword_match": {{
+    "match_percentage": <integer 0-100>,
+    "matched_keywords": ["<string>", "..."],
+    "missing_keywords": ["<string>", "..."],
+    "partial_keywords": ["<string>", "..."]
+  }},
   "is_fresher": <boolean>,
   "summary": "<2-3 sentences>"
 }}
@@ -65,7 +74,7 @@ Quantification, Skill Relevance, Language & Authenticity, Structure & Readabilit
 Completeness, and Competitive Standing. Do not deduct points for the absence of formal
 employment. For each dimension, provide an integer score from 0 to 100, a one-sentence
 verdict, and a finding tied directly to resume text. Also provide exactly three strengths,
-ordered critical fixes appropriate for a student, and an honest summary.
+ordered critical fixes appropriate for a student, an honest summary, and a keyword_match breakdown.
 
 [INPUT DATA]
 RESUME TEXT:
@@ -73,7 +82,10 @@ RESUME TEXT:
 {resume_text}
 ---
 TARGET ROLE: {target_role}
+JOB DESCRIPTION: {job_description}
 EVALUATION MODE: fresher
+
+{rag_context}
 
 [OUTPUT CONTRACT]
 Return ONLY a valid JSON object matching this exact schema. No preamble. No explanation
@@ -97,6 +109,12 @@ outside the JSON. No markdown code fences. No trailing commas. No extra keys.
       "fix": "<specific actionable step>"
     }}
   ],
+  "keyword_match": {{
+    "match_percentage": <integer 0-100>,
+    "matched_keywords": ["<string>", "..."],
+    "missing_keywords": ["<string>", "..."],
+    "partial_keywords": ["<string>", "..."]
+  }},
   "is_fresher": true,
   "summary": "<2-3 sentences>"
 }}
@@ -105,4 +123,3 @@ outside the JSON. No markdown code fences. No trailing commas. No extra keys.
 If the task cannot be completed, return:
 {{"error": "ANALYSIS_FAILED", "reason": "<brief explanation>"}}
 """
-

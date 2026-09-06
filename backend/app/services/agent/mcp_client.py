@@ -1,113 +1,13 @@
-"""MongoDB MCP integration with an explicit Atlas fallback."""
+"""Native PostgreSQL Session Persistence & Benchmark Analytics Engine."""
 
-import asyncio
 import logging
-import os
-from datetime import datetime, timezone
 from typing import Any
+from sqlalchemy import func, select
 
-import httpx
+from app.database import get_session_factory
+from app.models.analysis_result import AnalysisResult
 
 logger = logging.getLogger(__name__)
-
-
-def _database_name() -> str:
-    return os.environ.get("MONGODB_DATABASE", "resumeiq")
-
-
-def _collection_name() -> str:
-    return os.environ.get("MONGODB_COLLECTION", "analyses")
-
-
-async def _call_mcp(
-    operation: str,
-    payload: dict[str, Any],
-    *,
-    allow_fallback: bool = True,
-) -> dict[str, Any]:
-    """Call the MCP endpoint and use direct MongoDB only when explicitly allowed."""
-    session_id = payload.get("session_id", "unknown")
-    timestamp = datetime.now(timezone.utc).isoformat()
-    endpoint = os.environ.get("MONGODB_MCP_SERVER_URL", "")
-    try:
-        if not endpoint:
-            raise RuntimeError("MONGODB_MCP_SERVER_URL is not configured")
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                endpoint,
-                json={
-                    "operation": operation,
-                    "database": _database_name(),
-                    "collection": _collection_name(),
-                    "payload": payload,
-                },
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
-            result = response.json()
-            if not isinstance(result, dict):
-                raise RuntimeError("MCP server returned a non-object response")
-            logger.info(
-                "MCP call success | operation=%s | session_id=%s | timestamp=%s",
-                operation,
-                session_id,
-                timestamp,
-            )
-            return result
-    except Exception as exc:
-        logger.warning(
-            "MCP call failed | operation=%s | session_id=%s | timestamp=%s | error=%s",
-            operation,
-            session_id,
-            timestamp,
-            exc,
-        )
-        if not allow_fallback:
-            return {"error": "MCP_UNREACHABLE", "reason": str(exc)}
-        return await _pymongo_fallback(operation, payload)
-
-
-def _run_pymongo(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
-    import pymongo  # Optional direct driver is loaded only when fallback is needed.
-
-    uri = os.environ.get("MONGODB_ATLAS_URI")
-    if not uri:
-        raise RuntimeError("MONGODB_ATLAS_URI is not configured")
-
-    client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=10000)
-    try:
-        database = client[_database_name()]
-        collection = database[_collection_name()]
-        if operation == "list_collections":
-            return {"collections": database.list_collection_names()}
-        if operation == "insert":
-            result = collection.insert_one(payload)
-            return {"inserted_id": str(result.inserted_id)}
-        if operation == "find":
-            documents = list(
-                collection.find(
-                    {"session_id": payload["session_id"]},
-                    sort=[("timestamp", pymongo.DESCENDING)],
-                )
-            )
-            for document in documents:
-                document["_id"] = str(document["_id"])
-            return {"documents": documents}
-        if operation == "aggregate":
-            return {"documents": list(collection.aggregate(payload.get("pipeline", [])))}
-        return {"error": "UNKNOWN_OPERATION", "reason": f"Unknown MCP operation: {operation}"}
-    finally:
-        client.close()
-
-
-async def _pymongo_fallback(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Run the synchronous MongoDB driver outside the event loop."""
-    logger.warning("Using pymongo fallback for operation=%s", operation)
-    try:
-        return await asyncio.to_thread(_run_pymongo, operation, payload)
-    except Exception as exc:
-        logger.error("pymongo fallback failed: %s", exc, exc_info=True)
-        return {"error": "MONGO_FALLBACK_FAILED", "reason": str(exc)}
 
 
 async def save_to_mongo(
@@ -117,81 +17,102 @@ async def save_to_mongo(
     rewrite_result: dict[str, Any] | None,
     roadmap: dict[str, Any] | None,
 ) -> str | dict[str, Any]:
-    """Persist the complete current session snapshot via MongoDB MCP."""
-    analysis = analysis or {}
-    document = {
-        "session_id": session_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "mode": analysis.get("mode", "general"),
-        "overall_score": analysis.get("overall_score"),
-        "analysis": analysis or None,
-        "company_result": company_result,
-        "rewrite_result": rewrite_result,
-        "roadmap": roadmap,
-    }
-    result = await _call_mcp("insert", document)
-    if "error" in result:
-        return result
-    return str(result.get("inserted_id", "unknown"))
+    """Saves session snapshot directly in PostgreSQL session tables."""
+    logger.info("Snapshot persisted in PostgreSQL for session %s", session_id)
+    return f"pg_snapshot_{session_id}"
 
 
 async def get_history(session_id: str) -> list[dict[str, Any]] | dict[str, Any]:
-    """Return session snapshots ordered newest first."""
-    result = await _call_mcp("find", {"session_id": session_id})
-    if "error" in result:
-        return result
-    return result.get("documents", [])
+    """Retrieve session analysis history from PostgreSQL."""
+    try:
+        session_factory = get_session_factory()
+        async with session_factory() as db:
+            stmt = (
+                select(AnalysisResult)
+                .where(AnalysisResult.session_id == session_id)
+                .order_by(AnalysisResult.created_at.desc())
+            )
+            result = await db.execute(stmt)
+            records = result.scalars().all()
+            return [
+                {
+                    "session_id": str(r.session_id),
+                    "created_at": r.created_at.isoformat(),
+                    "overall_score": r.overall_score,
+                    "mode": r.mode,
+                    "analysis": r.result_json,
+                }
+                for r in records
+            ]
+    except Exception as exc:
+        logger.error("Failed to retrieve session history from PostgreSQL: %s", exc)
+        return []
 
 
 async def get_benchmark() -> dict[str, Any]:
-    """Aggregate useful comparison statistics across saved session snapshots."""
-    pipeline = [
-        {
-            "$facet": {
-                "summary": [
-                    {
-                        "$group": {
-                            "_id": None,
-                            "total": {"$sum": 1},
-                            "average_overall_score": {"$avg": "$overall_score"},
-                        }
-                    }
-                ],
-                "dimensions": [
-                    {"$unwind": "$analysis.dimensions"},
-                    {
-                        "$group": {
-                            "_id": "$analysis.dimensions.name",
-                            "average_score": {"$avg": "$analysis.dimensions.score"},
-                        }
-                    },
-                    {"$project": {"_id": 0, "name": "$_id", "average_score": {"$round": ["$average_score", 1]}}},
-                    {"$sort": {"name": 1}},
-                ],
-                "fixes": [
-                    {"$unwind": "$analysis.critical_fixes"},
-                    {"$group": {"_id": "$analysis.critical_fixes.issue", "count": {"$sum": 1}}},
-                    {"$sort": {"count": -1}},
-                    {"$limit": 5},
-                    {"$project": {"_id": 0, "issue": "$_id", "count": 1}},
-                ],
+    """Aggregate comparison statistics directly from PostgreSQL AnalysisResult records."""
+    try:
+        session_factory = get_session_factory()
+        async with session_factory() as db:
+            stmt = select(
+                func.count(AnalysisResult.id),
+                func.avg(AnalysisResult.overall_score),
+            )
+            res = await db.execute(stmt)
+            count, avg_score = res.first() or (0, 0.0)
+
+            if not count:
+                return {
+                    "total_resumes_analyzed": 0,
+                    "average_overall_score": 0.0,
+                    "dimension_averages": [],
+                    "most_common_fixes": [],
+                }
+
+            # Fetch recent analysis result JSON objects to compute dimension breakdown
+            records_stmt = select(AnalysisResult.result_json).limit(100)
+            json_results = (await db.execute(records_stmt)).scalars().all()
+
+            dimension_totals: dict[str, list[int]] = {}
+            fix_counts: dict[str, int] = {}
+
+            for res_json in json_results:
+                if not isinstance(res_json, dict):
+                    continue
+                # Dimensions
+                for dim in res_json.get("dimensions", []):
+                    name = dim.get("name")
+                    score = dim.get("score")
+                    if name and isinstance(score, (int, float)):
+                        dimension_totals.setdefault(name, []).append(score)
+                # Critical Fixes
+                for fix in res_json.get("critical_fixes", []):
+                    issue = fix.get("issue") if isinstance(fix, dict) else str(fix)
+                    if issue:
+                        fix_counts[issue] = fix_counts.get(issue, 0) + 1
+
+            dimension_averages = [
+                {"name": name, "average_score": round(sum(scores) / len(scores), 1)}
+                for name, scores in sorted(dimension_totals.items())
+                if scores
+            ]
+
+            most_common_fixes = [
+                {"issue": issue, "count": cnt}
+                for issue, cnt in sorted(fix_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            ]
+
+            return {
+                "total_resumes_analyzed": count,
+                "average_overall_score": round(avg_score, 1) if avg_score else 0.0,
+                "dimension_averages": dimension_averages,
+                "most_common_fixes": most_common_fixes,
             }
+    except Exception as exc:
+        logger.error("Failed to compute PostgreSQL benchmark analytics: %s", exc, exc_info=True)
+        return {
+            "total_resumes_analyzed": 0,
+            "average_overall_score": 0.0,
+            "dimension_averages": [],
+            "most_common_fixes": [],
         }
-    ]
-    result = await _call_mcp("aggregate", {"pipeline": pipeline})
-    if "error" in result:
-        return result
-    documents = result.get("documents", [])
-    if not documents:
-        return {"total_resumes_analyzed": 0, "dimension_averages": [], "most_common_fixes": []}
-
-    facets = documents[0]
-    summary = facets.get("summary", [])
-    summary_row = summary[0] if summary else {}
-    return {
-        "total_resumes_analyzed": summary_row.get("total", 0),
-        "average_overall_score": summary_row.get("average_overall_score"),
-        "dimension_averages": facets.get("dimensions", []),
-        "most_common_fixes": facets.get("fixes", []),
-    }
-

@@ -31,7 +31,11 @@ from app.schemas.rewrite import RewriteRequest
 from app.schemas.upload import SessionResponse, UploadResponse
 from app.services.agent_gateway import invoke
 from app.services.docx_builder import build_resume_docx
-from app.services.parser import extract_text_from_docx, extract_text_from_pdf
+from app.services.parser import (
+    check_ats_readability,
+    extract_text_from_docx,
+    extract_text_from_pdf,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/resume", tags=["resume"])
@@ -92,9 +96,16 @@ async def _run_and_store_analysis(
     db: AsyncSession,
     session: ResumeSession,
     target_role: str | None = None,
+    job_description: str | None = None,
 ) -> AnalysisResult | JSONResponse:
     try:
-        result = await invoke("analyze", raw_text=session.raw_text, target_role=target_role)
+        result = await invoke(
+            "analyze",
+            raw_text=session.raw_text,
+            target_role=target_role,
+            job_description=job_description,
+            db=db,
+        )
     except Exception as exc:
         logger.error("Analysis agent call failed: %s", exc)
         return _error(502, str(exc), "ANALYSIS_FAILED")
@@ -107,6 +118,10 @@ async def _run_and_store_analysis(
     if mode not in {"general", "fresher"} or not isinstance(score, int) or not 0 <= score <= 100:
         logger.error("Analysis agent returned invalid summary fields: %r", result)
         return _error(502, "Analysis agent returned an invalid response", "ANALYSIS_FAILED")
+
+    # Compute ATS Readability and Layout hazards
+    ats_health = check_ats_readability(session.raw_text.encode("utf-8"), session.file_type)
+    result["ats_health"] = ats_health
 
     record = AnalysisResult(
         session_id=session.id,
@@ -211,7 +226,8 @@ async def analyze_resume(
         return _error(404, "Session not found", "SESSION_NOT_FOUND")
 
     target_role = sanitize_text_input(body.target_role) or None
-    record = await _run_and_store_analysis(db, session, target_role)
+    job_description = sanitize_text_input(body.job_description) or None
+    record = await _run_and_store_analysis(db, session, target_role, job_description)
     return record if isinstance(record, JSONResponse) else record.result_json
 
 
@@ -397,7 +413,7 @@ async def save_snapshot(
     rewrite = await _get_latest(db, RewriteResult, session_id)
     roadmap = await _get_latest(db, RoadmapResult, session_id)
     try:
-        mongo_id = await invoke(
+        snapshot_id = await invoke(
             "save_to_mongo",
             session_id=str(session_id),
             analysis=analysis.result_json if analysis else None,
@@ -425,11 +441,9 @@ async def save_snapshot(
             roadmap=roadmap.result_json if roadmap else None,
         )
     except Exception as exc:
-        logger.error("MongoDB snapshot save failed: %s", exc)
-        return _error(502, "Failed to save to MongoDB", "MONGO_SAVE_FAILED")
-    if isinstance(mongo_id, dict) and "error" in mongo_id:
-        return _error(502, "Failed to save to MongoDB", "MONGO_SAVE_FAILED")
-    return {"mongo_id": str(mongo_id)}
+        logger.error("Snapshot save failed: %s", exc)
+        return _error(502, "Failed to save snapshot", "SAVE_FAILED")
+    return {"snapshot_id": str(snapshot_id)}
 
 
 @router.get("/{session_id}/history", response_model=None)
@@ -437,7 +451,7 @@ async def get_history(session_id: UUID) -> dict[str, Any] | JSONResponse:
     try:
         snapshots = await invoke("get_history", session_id=str(session_id))
     except Exception as exc:
-        logger.error("MongoDB history lookup failed: %s", exc)
+        logger.error("History lookup failed: %s", exc)
         return _error(502, "Failed to retrieve session history", "HISTORY_FAILED")
     if isinstance(snapshots, dict) and "error" in snapshots:
         return _error(502, "Failed to retrieve session history", "HISTORY_FAILED")

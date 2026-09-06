@@ -1,4 +1,4 @@
-"""RAG Service utilizing Gemini embeddings and PostgreSQL pgvector for semantic search."""
+"""RAG Service utilizing Gemini embeddings and native PostgreSQL pgvector similarity search."""
 
 import logging
 import os
@@ -31,7 +31,6 @@ async def generate_embedding(text: str) -> list[float]:
     """Generate a vector embedding using Google Gemini text-embedding-004."""
     try:
         client = _get_genai_client()
-        # Truncate text to avoid token limits if necessary
         cleaned_text = text.strip()[:2000]
         if not cleaned_text:
             return [0.0] * 768
@@ -48,7 +47,6 @@ async def generate_embedding(text: str) -> list[float]:
             raise ValueError("Unexpected response format from embedding API")
     except Exception as exc:
         logger.error("Failed to generate embedding via Gemini: %s", exc, exc_info=True)
-        # Fallback zero vector in case of embedding API outage
         return [0.0] * 768
 
 
@@ -99,10 +97,9 @@ async def search_similar_jds(
     db: AsyncSession,
     limit: int = 5,
 ) -> list[dict[str, Any]]:
-    """Perform vector similarity search using pgvector cosine distance."""
+    """Perform vector similarity search using native pgvector cosine distance."""
     query_vector = await generate_embedding(query_text)
 
-    # Perform cosine distance ordering using pgvector
     stmt = (
         select(JobDescriptionEmbedding)
         .order_by(JobDescriptionEmbedding.embedding.cosine_distance(query_vector))
@@ -112,17 +109,15 @@ async def search_similar_jds(
     result = await db.execute(stmt)
     rows = result.scalars().all()
 
-    matches = []
-    for row in rows:
-        matches.append(
-            {
-                "id": str(row.id),
-                "role_title": row.role_title,
-                "company": row.company,
-                "content_chunk": row.content_chunk,
-            }
-        )
-    return matches
+    return [
+        {
+            "id": str(row.id),
+            "role_title": row.role_title,
+            "company": row.company,
+            "content_chunk": row.content_chunk,
+        }
+        for row in rows
+    ]
 
 
 async def build_rag_context(

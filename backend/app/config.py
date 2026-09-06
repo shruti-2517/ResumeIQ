@@ -49,18 +49,6 @@ class Settings:
     google_cloud_location: str = field(
         default_factory=lambda: os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
     )
-    mongodb_mcp_server_url: str = field(
-        default_factory=lambda: os.environ.get("MONGODB_MCP_SERVER_URL", "")
-    )
-    mongodb_atlas_uri: str = field(
-        default_factory=lambda: os.environ.get("MONGODB_ATLAS_URI", "")
-    )
-    mongodb_database: str = field(
-        default_factory=lambda: os.environ.get("MONGODB_DATABASE", "resumeiq")
-    )
-    mongodb_collection: str = field(
-        default_factory=lambda: os.environ.get("MONGODB_COLLECTION", "analyses")
-    )
     google_drive_client_id: str = field(
         default_factory=lambda: os.environ.get("GOOGLE_DRIVE_CLIENT_ID", "")
     )
