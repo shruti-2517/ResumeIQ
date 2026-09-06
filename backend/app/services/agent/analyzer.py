@@ -1,4 +1,4 @@
-"""Resume analysis pipeline with RAG context and fresher-mode switching."""
+"""Autonomous Resume Auditor Agent with tool execution and fresher calibration."""
 
 import logging
 from typing import Any
@@ -6,6 +6,11 @@ from typing import Any
 from .gemini import call_gemini
 from .prompts.analysis import FRESHER_ANALYSIS_PROMPT, GENERAL_ANALYSIS_PROMPT
 from .rag_service import build_rag_context, seed_job_description
+from .tools.auditor_tools import (
+    tool_check_ats_readability,
+    tool_extract_keyword_gaps,
+    tool_retrieve_vector_benchmarks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,14 +65,17 @@ async def analyze(
     job_description: str | None = None,
     db: Any = None,
 ) -> dict[str, Any]:
-    """Analyze a resume using Gemini, augmented with RAG context and JD keyword matching."""
+    """Autonomous Resume Auditor Agent: executes tools and analyzes resume with Gemini."""
     if not isinstance(raw_text, str) or not raw_text.strip():
         return {"error": "ANALYSIS_FAILED", "reason": "Resume text is empty"}
 
     target = target_role.strip() if isinstance(target_role, str) and target_role.strip() else "Not specified"
     jd = job_description.strip() if isinstance(job_description, str) and job_description.strip() else "Not provided"
 
-    # Seed JD into RAG embeddings if provided and DB session is available
+    # Agent Tool Execution Step 1: Execute ATS layout readability tool
+    ats_tool_data = tool_check_ats_readability(raw_text, "pdf")
+
+    # Agent Tool Execution Step 2: Seed JD and query pgvector store
     if db is not None and jd != "Not provided":
         try:
             await seed_job_description(
@@ -77,38 +85,50 @@ async def analyze(
                 db=db,
             )
         except Exception as exc:
-            logger.warning("Failed to seed JD into RAG embeddings: %s", exc)
+            logger.warning("Agent JD seeding warning: %s", exc)
 
-    # Retrieve RAG context if DB session is available
+    # Agent Tool Execution Step 3: Retrieve vector benchmarks
     rag_context = ""
     if db is not None:
         try:
             rag_context = await build_rag_context(target_role, None, raw_text, db)
         except Exception as exc:
-            logger.warning("Failed to build RAG context: %s", exc)
+            logger.warning("Agent RAG retrieval warning: %s", exc)
 
+    # Agent Tool Execution Step 4: Extract keyword gaps
+    keyword_tool_data = tool_extract_keyword_gaps(raw_text, jd)
+
+    # Synthesize Auditor Agent prompt with tool ground truths
     prompt_str = GENERAL_ANALYSIS_PROMPT.format(
         resume_text=raw_text,
         target_role=target,
         job_description=jd,
-        rag_context=rag_context,
+        rag_context=f"{rag_context}\n\nATS Layout Inspection: {ats_tool_data}\nKeyword Gap Tool: {keyword_tool_data}",
     )
 
     result = await call_gemini(prompt_str, expect_json=True)
     if not isinstance(result, dict) or "error" in result:
         return result
 
+    # Attach tool outputs to final agent result
+    result["ats_health"] = ats_tool_data
+    if "keyword_match" not in result or not isinstance(result["keyword_match"], dict):
+        result["keyword_match"] = keyword_tool_data
+
     if result.get("is_fresher") is True:
-        logger.info("Fresher resume detected; rerunning analysis in fresher mode")
+        logger.info("Fresher resume detected by Auditor Agent; recalibrating in fresher mode")
         fresher_prompt_str = FRESHER_ANALYSIS_PROMPT.format(
             resume_text=raw_text,
             target_role=target,
             job_description=jd,
-            rag_context=rag_context,
+            rag_context=f"{rag_context}\n\nATS Layout Inspection: {ats_tool_data}\nKeyword Gap Tool: {keyword_tool_data}",
         )
         result = await call_gemini(fresher_prompt_str, expect_json=True)
         if not isinstance(result, dict) or "error" in result:
             return result
+        result["ats_health"] = ats_tool_data
+        if "keyword_match" not in result or not isinstance(result["keyword_match"], dict):
+            result["keyword_match"] = keyword_tool_data
         error = _validate_analysis(result, "fresher")
         return error or result
 
