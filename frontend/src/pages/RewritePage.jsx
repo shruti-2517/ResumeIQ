@@ -5,6 +5,7 @@ import { useAnalysis } from '../hooks/useAnalysis';
 
 import SideBySide from '../components/rewrite/SideBySide';
 import ChangeLog from '../components/rewrite/ChangeLog';
+import AuthenticityDiff from '../components/rewrite/AuthenticityDiff';
 
 import Button from '../components/common/Button';
 import Spinner from '../components/common/Spinner';
@@ -85,6 +86,13 @@ export default function RewritePage() {
         <div className="mt-8 mb-8">
           <ChangeLog changes={rewriteResult.change_log} />
         </div>
+
+        {/* AI Authenticity Verification Guardrail */}
+        {rewriteResult.authenticity && (
+          <div className="mb-8">
+            <AuthenticityDiff authenticity={rewriteResult.authenticity} />
+          </div>
+        )}
 
         {/* Side by Side Comparison */}
         <SideBySide 

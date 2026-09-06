@@ -7,6 +7,8 @@ import ScoreRing from '../components/analysis/ScoreRing';
 import DimensionCard from '../components/analysis/DimensionCard';
 import StrengthsList from '../components/analysis/StrengthsList';
 import CriticalFixes from '../components/analysis/CriticalFixes';
+import AtsHealthCard from '../components/analysis/AtsHealthCard';
+import JdHeatmap from '../components/analysis/JdHeatmap';
 import CompanyInput from '../components/company/CompanyInput';
 import SignalsPanel from '../components/company/SignalsPanel';
 import GapList from '../components/company/GapList';
@@ -112,6 +114,16 @@ export default function AnalysisPage() {
             {analysis.summary}
           </p>
         </div>
+
+        {/* ATS Health Gauge & Readability */}
+        {analysis.ats_health && (
+          <AtsHealthCard atsHealth={analysis.ats_health} />
+        )}
+
+        {/* Job Description Keyword Heatmap */}
+        {analysis.keyword_match && (
+          <JdHeatmap keywordMatch={analysis.keyword_match} />
+        )}
 
         {/* Strengths */}
         <StrengthsList strengths={analysis.top_strengths} />
