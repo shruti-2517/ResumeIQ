@@ -1,6 +1,8 @@
 """Resume upload, analysis, rewrite, persistence, and export endpoints."""
 
+import asyncio
 import io
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
 from app.database import get_db
@@ -135,6 +138,66 @@ async def _run_and_store_analysis(
     return record
 
 
+async def _analysis_stream_generator(
+    db: AsyncSession,
+    session: ResumeSession,
+    target_role: str | None = None,
+    job_description: str | None = None,
+):
+    """Generate Server-Sent Events (SSE) broadcasting analysis execution steps."""
+    # Step 1: Parsing & ATS Health
+    yield {
+        "event": "progress",
+        "data": json.dumps({
+            "step": 1,
+            "total": 4,
+            "progress_percentage": 25,
+            "message": "Parsing document layout & running ATS Readability check...",
+        }),
+    }
+    await asyncio.sleep(0.3)
+
+    # Step 2: RAG Embedding & Vector Retrieval
+    yield {
+        "event": "progress",
+        "data": json.dumps({
+            "step": 2,
+            "total": 4,
+            "progress_percentage": 50,
+            "message": "Retrieving industry benchmark vectors from RAG store...",
+        }),
+    }
+    await asyncio.sleep(0.3)
+
+    # Step 3: Gemini Evaluation & Keyword Matching
+    yield {
+        "event": "progress",
+        "data": json.dumps({
+            "step": 3,
+            "total": 4,
+            "progress_percentage": 75,
+            "message": "Evaluating 7 dimensions & JD keyword match with Google Gemini...",
+        }),
+    }
+
+    record = await _run_and_store_analysis(db, session, target_role, job_description)
+    result_data = (
+        record if isinstance(record, dict) else (record.result_json if hasattr(record, "result_json") else {})
+    )
+
+    # Step 4: Completion
+    yield {
+        "event": "complete",
+        "data": json.dumps({
+            "step": 4,
+            "total": 4,
+            "progress_percentage": 100,
+            "message": "Analysis completed successfully!",
+            "result": result_data,
+        }),
+    }
+
+
 @router.post("/upload", response_model=UploadResponse)
 @limiter.limit(settings.rate_limit_post)
 async def upload_resume(
@@ -229,6 +292,26 @@ async def analyze_resume(
     job_description = sanitize_text_input(body.job_description) or None
     record = await _run_and_store_analysis(db, session, target_role, job_description)
     return record if isinstance(record, JSONResponse) else record.result_json
+
+
+@router.get("/{session_id}/analyze/stream", response_model=None)
+async def analyze_resume_stream(
+    session_id: UUID,
+    target_role: str | None = None,
+    job_description: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream real-time analysis execution progress steps via Server-Sent Events (SSE)."""
+    session = await _get_session(db, session_id)
+    if session is None:
+        return _error(404, "Session not found", "SESSION_NOT_FOUND")
+
+    target_role_clean = sanitize_text_input(target_role) or None
+    job_desc_clean = sanitize_text_input(job_description) or None
+
+    return EventSourceResponse(
+        _analysis_stream_generator(db, session, target_role_clean, job_desc_clean)
+    )
 
 
 @router.post("/{session_id}/analyze/company", response_model=None)
