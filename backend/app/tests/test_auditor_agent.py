@@ -34,7 +34,7 @@ def test_tool_extract_keyword_gaps_execution():
     assert "Docker" in res["missing_keywords"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_execute_auditor_tool_dispatcher():
     res = await execute_auditor_tool("tool_extract_keyword_gaps", {
         "resume_text": "Python FastAPI Developer",

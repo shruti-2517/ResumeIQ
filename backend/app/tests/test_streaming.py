@@ -1,6 +1,7 @@
 """Unit tests for Server-Sent Events (SSE) Streaming & E2E Validation."""
 
 import json
+
 import pytest
 from app.routers.resume import _analysis_stream_generator
 
@@ -11,7 +12,7 @@ class DummySession:
     file_type = "pdf"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_analysis_stream_generator_mock(monkeypatch):
     async def mock_run_and_store(db, session, target_role, job_description):
         return {"overall_score": 90, "mode": "general"}

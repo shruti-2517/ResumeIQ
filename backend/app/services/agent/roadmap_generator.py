@@ -1,10 +1,14 @@
-"""Resume improvement roadmap generation."""
+"""Autonomous Career Coach Agent for resume improvement roadmap generation."""
 
 import logging
 from typing import Any
 
 from .gemini import call_gemini
 from .prompts.roadmap import ROADMAP_PROMPT
+from .tools.coach_tools import (
+    tool_fetch_certification_paths,
+    tool_search_learning_resources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +74,37 @@ async def roadmap(
     analysis: dict[str, Any],
     company_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Generate a grounded, ordered, time-bound resume improvement plan."""
+    """Autonomous Career Coach Agent: searches learning tools & builds grounded, ordered, time-bound improvement roadmap."""
     if not isinstance(analysis, dict) or "error" in analysis:
         return {"error": "ROADMAP_FAILED", "reason": "A valid resume analysis is required"}
+
+    # Extract target role & missing skills for Career Coach Agent tool execution
+    target_role = "Software Engineer"
+    if company_result and company_result.get("company_name"):
+        target_role = company_result.get("company_name")
+    elif analysis.get("target_role"):
+        target_role = analysis.get("target_role")
+
+    missing_keywords = []
+    keyword_match = analysis.get("keyword_match")
+    if isinstance(keyword_match, dict):
+        missing_keywords = keyword_match.get("missing_keywords", [])
+
+    # Coach Agent Tool Execution 1: Search Learning Resources for top missing skills
+    learning_resources = []
+    skills_to_search = missing_keywords[:3] if missing_keywords else ["System Design", "Cloud Infrastructure"]
+    for skill in skills_to_search:
+        res = tool_search_learning_resources(skill)
+        learning_resources.append(res)
+
+    # Coach Agent Tool Execution 2: Fetch Industry Certification Paths
+    cert_paths = tool_fetch_certification_paths(target_role)
+
+    # Format Coach Tools Context
+    coach_tools_context = (
+        f"Target Role Certification Paths: {cert_paths}\n"
+        f"Recommended Learning Resources: {learning_resources}"
+    )
 
     result = await call_gemini(
         ROADMAP_PROMPT.format(
@@ -82,11 +114,14 @@ async def roadmap(
             critical_fixes_formatted=_format_critical_fixes(analysis.get("critical_fixes", [])),
             dimension_scores_formatted=_format_dimensions(analysis.get("dimensions", [])),
             company_context=_format_company_context(company_result),
+            coach_tools_context=coach_tools_context,
         ),
         expect_json=True,
     )
+
     if not isinstance(result, dict) or "error" in result:
         return result
+
     if not result.get("items"):
         logger.warning("Roadmap returned no items; inserting a focused fallback")
         result["items"] = [
@@ -98,6 +133,10 @@ async def roadmap(
                 "done_when": "The top fix is complete and a new analysis result is available.",
             }
         ]
+
+    # Attach Career Coach Agent tool outputs
+    result["learning_resources"] = learning_resources
+    result["certification_paths"] = cert_paths
+
     _add_frontend_aliases(result, analysis.get("overall_score"))
     return result
-
