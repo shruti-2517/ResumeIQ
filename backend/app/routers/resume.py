@@ -32,7 +32,7 @@ from app.schemas.analysis import AnalysisRequest
 from app.schemas.company import CompanyAnalysisRequest
 from app.schemas.rewrite import RewriteRequest
 from app.schemas.upload import SessionResponse, UploadResponse
-from app.services.agent_gateway import invoke
+from app.services.agent_gateway import get_supervisor_state, get_tool_logs, invoke
 from app.services.docx_builder import build_resume_docx
 from app.services.parser import (
     check_ats_readability,
@@ -565,3 +565,21 @@ async def export_to_drive(
     if isinstance(url, dict) and "error" in url:
         return _error(502, "Failed to export to Google Drive", "DRIVE_EXPORT_FAILED")
     return {"drive_url": str(url)}
+
+
+@router.get("/{session_id}/agent/logs", response_model=None)
+async def get_agent_logs(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any] | JSONResponse:
+    """Retrieve multi-agent supervisor state, telemetry metrics, and tool call logs for a session."""
+    session = await _get_session(db, session_id)
+    if session is None:
+        return _error(404, "Session not found", "SESSION_NOT_FOUND")
+
+    return {
+        "session_id": str(session_id),
+        "supervisor_state": get_supervisor_state(),
+        "tool_logs": get_tool_logs(limit=50),
+    }
+
