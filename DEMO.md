@@ -1,69 +1,76 @@
-# ResumeIQ — Demo & Local Setup Guide
+# ResumeIQ — Local Setup & Quickstart Guide
 
-Follow these steps to run ResumeIQ locally from scratch.
+Follow these instructions to run **ResumeIQ** locally.
+
+---
 
 ## 1. Environment Setup
 
-Use Python 3.12 with the pinned backend dependencies.
-
-1. Copy the example config:
-   ```bash
-   cp .env.example .env
-   ```
-2. Fill in the required variables in `.env` (PostgreSQL credentials, Google Gemini API key, MongoDB MCP URL, etc.).
-
-### MongoDB Setup
-
-Use a MongoDB Atlas cluster and set `MONGODB_ATLAS_URI`. A local MongoDB
-Community Server download is not required when Atlas is used. MongoDB Compass
-is optional and is useful only as a desktop GUI for inspecting stored data.
-
-Set `MONGODB_MCP_SERVER_URL` to the MCP server used by the separately owned
-agent service. MongoDB save, history, benchmark, and health calls remain part
-of the backend API contract.
-
-## 2. Database Initialisation
-
-1. Start your local PostgreSQL server.
-2. In the `backend/` directory, set up your Python virtual environment and install dependencies:
-   ```bash
-   py -3.12 -m venv .venv  # Windows
-   source .venv/bin/activate  # macOS/Linux
-   .\.venv\Scripts\Activate.ps1  # Windows PowerShell
-   pip install -r requirements.txt
-   ```
-3. Run Alembic migrations to create the tables (once configured):
-   ```bash
-   alembic upgrade head
-   ```
-
-## 3. Start the Application
-
-### Backend
-From the `backend/` directory (with your virtual environment active):
+Copy the template config file:
 ```bash
-uvicorn app.main:app --reload
+cp .env.example .env
 ```
-The API will be available at `http://localhost:8000`.
-You can check the API docs at `http://localhost:8000/docs`.
 
-### Frontend
+Set your required environment variables in `.env`:
+- `DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/resumeiq`
+- `GOOGLE_API_KEY=your_gemini_api_key_here`
+
+---
+
+## 2. PostgreSQL with pgvector Setup
+
+Start PostgreSQL 16 with `pgvector` enabled (e.g. via Docker):
+```bash
+docker run -d \
+  --name resumeiq-postgres \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=resumeiq \
+  -p 5433:5432 \
+  pgvector/pgvector:pg16
+```
+
+---
+
+## 3. Backend Setup & Alembic Migrations
+
+From the `backend/` directory:
+```bash
+# Create and activate virtual environment
+python -m venv .venv
+# On Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+# On macOS/Linux:
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run Alembic migrations (enables pgvector extension & tables)
+alembic upgrade head
+
+# Start FastAPI server
+uvicorn app.main:app --reload --port 8000
+```
+Interactive API docs are available at `http://localhost:8000/docs`.
+
+---
+
+## 4. Frontend Setup
+
 From the `frontend/` directory in a new terminal window:
 ```bash
 npm install
 npm run dev
 ```
-The React app will be available at `http://localhost:5173`.
+Open `http://localhost:5173` in your browser.
 
-## 4. Phase Testing (Curl Commands)
+---
 
-### Phase 0: Health Checks
+## 5. Running the Backend Test Suite
+
+Run the full 23-test suite covering agent tools, RAG search, ATS parsing, SSE streaming, and supervisor state tracking:
 ```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/health/db
-curl http://localhost:8000/health/llm
-curl http://localhost:8000/health/mcp
+cd backend
+python -m pytest app/tests/
 ```
-*Expected: each configured service responds with its own structured status.*
-
-*(Further phase commands will be added here as the application progresses.)*
